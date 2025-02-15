@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Controlled Map</title>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map { height: 500px; }
+        #info { margin-top: 10px; font-size: 16px; }
+    </style>
+</head>
+<body>
+
+    <button onclick="startListening()">🎤 Start Voice Control</button>
+    <button onclick="trackLocation()">📍 Track My Location</button>
+    <div id="map"></div>
+    <p id="info"></p>
+
+    <script>
+        var map = L.map('map').setView([20.5937, 78.9629], 5);
+
+        var baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        var satelliteLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png');
+
+        function startListening() {
+            const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            recognition.lang = 'en-US';
+            recognition.start();
+
+            recognition.onresult = function(event) {
+                let command = event.results[0][0].transcript.toLowerCase();
+                console.log("Heard:", command);
+                
+                if (command.includes("zoom to")) {
+                    let location = command.split("zoom to")[1].trim();
+                    goToLocation(location);
+                } else if (command.includes("show satellite view")) {
+                    map.removeLayer(baseLayer);
+                    satelliteLayer.addTo(map);
+                } else if (command.includes("show default view")) {
+                    map.removeLayer(satelliteLayer);
+                    baseLayer.addTo(map);
+                } else if (command.includes("marker")) {
+                    addMarker();
+                } else if (command.includes("route from")) {
+                    let places = command.replace("route from", "").split("to");
+                    if (places.length === 2) {
+                        findRoute(places[0].trim(), places[1].trim());
+                    } else {
+                        alert("Say 'Find route from X to Y'");
+                    }
+                } else {
+                    alert("Command not recognized. Try 'Zoom to Ahmedabad' or 'Find route from Delhi to Mumbai'.");
+                }
+            };
+        }
+
+        function goToLocation(place) {
+            let url = `https://nominatim.openstreetmap.org/search?format=json&q=${place}`;
+            fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                if (data.length > 0) {
+                    let lat = data[0].lat;
+                    let lon = data[0].lon;
+                    map.setView([lat, lon], 12);
+                } else {
+                    alert("Location not found. Try another place.");
+                }
+            })
+            .catch(error => console.log("Error fetching location:", error));
+        }
+
+        function findRoute(startPlace, endPlace) {
+            let startUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${startPlace}`;
+            let endUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${endPlace}`;
+
+            Promise.all([fetch(startUrl), fetch(endUrl)])
+            .then(responses => Promise.all(responses.map(res => res.json())))
+            .then(([startData, endData]) => {
+                if (startData.length > 0 && endData.length > 0) {
+                    let startLat = startData[0].lat;
+                    let startLon = startData[0].lon;
+                    let endLat = endData[0].lat;
+                    let endLon = endData[0].lon;
+                    
+                    let routeUrl = `https://api.openrouteservice.org/v2/directions/driving-car?api_key=5b3ce3597851110001cf624866613c94738b4470b8bc142bee71b821&start=${startLon},${startLat}&end=${endLon},${endLat}`;
+
+                    fetch(routeUrl)
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log("Full API Response:", data);
+                        if (!data.features || data.features.length === 0) {
+                            alert("No route found. Check if locations are valid.");
+                            return;
+                        }
+                        
+                        let routeCoords = data.features[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
+                        let distance = (data.features[0].properties.segments[0].distance / 1000).toFixed(2);
+                        let duration = (data.features[0].properties.segments[0].duration / 60).toFixed(2);
+                        
+                        if (window.currentRoute) {
+                            map.removeLayer(window.currentRoute);
+                        }
+
+                        window.currentRoute = L.polyline(routeCoords, { color: 'blue', weight: 5 }).addTo(map);
+                        map.fitBounds(window.currentRoute.getBounds());
+                        
+                        document.getElementById("info").innerText = `Distance: ${distance} km | Duration: ${duration} min`;
+                    })
+                    .catch(error => console.log("Error fetching route:", error));
+                } else {
+                    alert("One or both locations not found.");
+                }
+            })
+            .catch(error => console.log("Error fetching locations:", error));
+        }
+
+        function trackLocation() {
+            if (!navigator.geolocation) {
+                alert("Geolocation is not supported by your browser.");
+                return;
+            }
+
+            navigator.geolocation.watchPosition(position => {
+                let lat = position.coords.latitude;
+                let lon = position.coords.longitude;
+                if (window.userMarker) {
+                    map.removeLayer(window.userMarker);
+                }
+                window.userMarker = L.marker([lat, lon]).addTo(map)
+                    .bindPopup("Your location").openPopup();
+                map.setView([lat, lon], 14);
+            }, error => {
+                alert("Error retrieving location: " + error.message);
+            });
+        }
+    </script>
+</body>
+</html>
